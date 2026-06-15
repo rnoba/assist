@@ -1,4 +1,4 @@
-import { getTime, hasFlag, waitTime } from "../utils";
+import { AxisX, getTime, hasFlag, hashText, measureText, waitTime } from "../utils";
 import {
   colorFromKind,
   ColorKind_None,
@@ -9,19 +9,26 @@ import {
 } from "./color";
 
 import {
+  BoxFlags_DrawText,
+  BoxFlags_TextWrap,
   BoxIdNone,
   BoxNode,
 
   calcLayout,
-
-  sizeFitContent,
 
   sizeFixed,
 
   type BoxId,
   type BoxOpts,
 } from "./box";
-import { InputPoll } from "./input";
+
+import {
+  EventActionKind_Press,
+  EventKind_Mouse,
+  InputPoll,
+
+  type Event,
+} from "./input";
 
 const ANSI = {
   clear:           () => "\x1b[2J\x1b[H",
@@ -29,8 +36,8 @@ const ANSI = {
   hideCursor:      () => "\x1b[?25l",
   showCursor:      () => "\x1b[?25h",
 
-  enableMouse:     () => "\x1b[?1003h\x1b[?1006h",
-  disableMouse:    () => "\x1b[?1003l\x1b[?1006l",
+  enableMouse:     () => "\x1b[?1002h\x1b[?1006h",
+  disableMouse:    () => "\x1b[?1002l\x1b[?1006l",
 
   enablePaste:     () => "\x1b[?2004h",
   disablePaste:    () => "\x1b[?2004l",
@@ -50,8 +57,6 @@ const SEQ = {
   FG_DEFAULT: new Uint8Array([0x1b,0x5b,0x33,0x39,0x6d]),           // \x1b[39m
   BG_DEFAULT: new Uint8Array([0x1b,0x5b,0x34,0x39,0x6d]),           // \x1b[49m
 } as const;
-const TARGET_FPS        = 30;
-const TARGET_FRAME_TIME = 1000/TARGET_FPS;
 const CELL_STRIDE = 2;
 const CellMask_Codepoint = 0x001FFFFF; // 0-20
 const CellMask_Flags     = 0xFFE00000; //21-31
@@ -84,17 +89,6 @@ let frameBegin: number = 0;
 const BUFFER_CAPACITY = 1 << 20; // 1MB
 const buffer = new Uint8Array(BUFFER_CAPACITY);
 let   bufferPosition: number = 0;
-
-
-const UiState = {
-  root: null as any as BoxNode,
-  BOX_CACHE: new Map<BoxId, BoxNode>(),
-  BOX_FREE_LIST: [] as Array<BoxNode>,
-
-  frameDelta: TARGET_FRAME_TIME,
-  elapsed:    0,
-  frameCount: 0,
-};
 
 function UiBufferFlush() {
   if (bufferPosition > 0) {
@@ -176,9 +170,26 @@ function UiResize(newWidth: number, newHeight: number) {
   UiState.root!.rect.max[0] = width;
   UiState.root!.rect.max[1] = height;
 }
+const TARGET_FPS        = 30;
+const TARGET_FRAME_TIME = 1000/TARGET_FPS;
+const UiState = {
+  root: null as any as BoxNode,
+  hot: 0 as BoxId,
+  focused: 0 as BoxId,
+  active: 0 as BoxId,
+
+  cursor: { x: 0, y: 0 },
+  BOX_CACHE:     new Map<BoxId, BoxNode>(),
+  BOX_FREE_LIST: [] as Array<BoxNode>,
+  UI_EVENTS:  [] as Array<Event>,
+
+  frameDelta: TARGET_FRAME_TIME,
+  elapsed:    0,
+  frameCount: 0,
+};
 
 function UiInit() {
-  UiState.root = Box(BoxIdNone, { size: [sizeFixed(width), sizeFixed(height)] });
+  UiState.root = Box("", { prefWidth: sizeFixed(width), prefHeight: sizeFixed(height) });
   UiState.root!.rect.max[0] = width;
   UiState.root!.rect.max[1] = height;
 
@@ -334,7 +345,20 @@ function UiBeginFrame() {
   UiState.frameCount += 1;
   frameBegin          = getTime();
 
-  InputPoll();
+  const events = InputPoll();
+  let   count  = events.length; 
+  for (let idx = 0; idx < count; idx += 1) {
+    const event = events[idx]!;
+    if (event.kind   === EventKind_Mouse       &&
+        event.action === EventActionKind_Press &&
+        event.name   === "left") {
+
+      UiState.cursor.x = event.mouseX;
+      UiState.cursor.y = event.mouseY;
+    }
+
+    UiState.UI_EVENTS.push(event);
+  }
   UiClearScreen();
 }
 
@@ -360,17 +384,21 @@ async function UiEndFrame() {
     }
   }
   UiState.root.children.length = 0;
+  UiState.UI_EVENTS.length     = 0;
 }
 
 function BoxFromCache(id: BoxId) { return UiState.BOX_CACHE.get(id) ?? null; }
-function Box(id: BoxId, opts?: BoxOpts) {
-  let box = BoxFromCache(id);
+
+function Box(hash: string, opts?: BoxOpts) {
+  const id  = hashText(hash);
+  let   box = BoxFromCache(id);
 
   const boxIsFirstFrame = box === null;
   const boxIsTransient  = id  === BoxIdNone;
   if (boxIsFirstFrame) {
     if (!boxIsTransient && UiState.BOX_FREE_LIST.length) {
       box = UiState.BOX_FREE_LIST.pop()!;
+      box.reset();
     } else { box = new BoxNode(); }
   }
 
@@ -378,26 +406,51 @@ function Box(id: BoxId, opts?: BoxOpts) {
     UiState.BOX_CACHE.set(id, box!);
   }
 
-  box!.id                  = id;
-  box!.flags               = opts?.flags      ?? 0;
-  box!.background          = opts?.background ?? 0;
-  box!.foreground          = opts?.foreground ?? 0;
+  box!.id         = id;
+  box!.flags      = opts?.flags      ?? 0;
+  box!.background = opts?.background ?? 0;
+  box!.foreground = opts?.foreground ?? 0;
+  box!.layoutAxis = opts?.layoutAxis ?? AxisX;
+
+  box!.maxFixedSize[0] = opts?.maxFixedWidth  ?? Number.MAX_SAFE_INTEGER;
+  box!.maxFixedSize[1] = opts?.maxFixedHeight ?? Number.MAX_SAFE_INTEGER;
+
   if (opts) {
+    let textDirty = false; 
     if (opts.text !== undefined && opts.text !== box!.rawText) {
-      box!.rawText   = opts.text;
-      box!.textDirty = true;
+      textDirty    = true;
+      box!.rawText = opts.text;
     }
 
-    if (opts.size !== undefined) {
-      box!.preferedSize[0].minKeepRatio = opts.size[0].minKeepRatio;
-      box!.preferedSize[0].kind         = opts.size[0].kind;
-      box!.preferedSize[0].value        = opts.size[0].value;
 
-      box!.preferedSize[1].minKeepRatio = opts.size[1].minKeepRatio;
-      box!.preferedSize[1].kind         = opts.size[1].kind;
-      box!.preferedSize[1].value        = opts.size[1].value;
+    if (hasFlag(box!.flags, BoxFlags_DrawText) && box!.rawText !== null &&
+        (boxIsFirstFrame || textDirty || box!.lastTextMetricsWrapWidth !== box!.fixedSize[0])) {
+      let   text       = box!.rawText;
+      const shouldWrap = hasFlag(box!.flags, BoxFlags_TextWrap); 
+      if (shouldWrap) {
+        box!.wrappedText = Bun.wrapAnsi(text, box!.fixedSize[0], {
+          hard: true,
+          trim: false
+        });
+
+        text = box!.wrappedText;
+      }
+
+      box!.textMetrics              = measureText(text, box!.fixedSize[0], shouldWrap, box!.textMetrics);
+      box!.lastTextMetricsWrapWidth = box!.fixedSize[0];
     }
 
+    if (opts.prefWidth !== undefined) {
+      box!.preferedSize[0].minKeepRatio = opts.prefWidth.minKeepRatio;
+      box!.preferedSize[0].kind         = opts.prefWidth.kind;
+      box!.preferedSize[0].value        = opts.prefWidth.value;
+    }
+
+    if (opts.prefHeight !== undefined) {
+      box!.preferedSize[1].minKeepRatio = opts.prefHeight.minKeepRatio;
+      box!.preferedSize[1].kind         = opts.prefHeight.kind;
+      box!.preferedSize[1].value        = opts.prefHeight.value;
+    }
   }
 
   box!.children.length   = 0;
