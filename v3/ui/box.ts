@@ -2,8 +2,10 @@ import { DebugLog } from "../debug";
 import {
   AxisCount,
   AxisX,
+  charWidth,
   clamp,
   hasFlag,
+  hashText,
   Range2xIntersect,
   Range2xIntersectPoint,
   Range2xMake,
@@ -41,10 +43,9 @@ const BoxFlags_ViewClamp        = 1 << 10;
 const BoxFlags_TextAlignCenterX = 1 << 11;
 const BoxFlags_TextAlignCenterY = 1 << 12;
 const BoxFlags_TextAlignCenter  = BoxFlags_TextAlignCenterX|BoxFlags_TextAlignCenterY;
-const BoxFlags_TextAlignLeft    = 1 << 13;
-const BoxFlags_TextAlignRight   = 1 << 14;
+const BoxFlags_TextAlignEnd     = 1 << 13;
 
-const BoxFlags_TextWrap         = 1 << 15;
+const BoxFlags_TextWrap         = 1 << 14;
 
 type BoxSizeKind = number;
 type BoxSize     = { kind: BoxSizeKind; value: number; minKeepRatio: number; }
@@ -81,6 +82,8 @@ type BoxOpts = {
   prefHeight?: BoxSize;
   maxFixedWidth?:  number;
   maxFixedHeight?: number;
+  minFixedWidth?:  number;
+  minFixedHeight?: number;
 };
 
 type BoxInteraction = {
@@ -90,8 +93,7 @@ type BoxInteraction = {
 type BoxTextMetrics = {
   size:                  [number, number];
   lineBoundaries:        number[];
-  wrappedLineBoundaries: number[];
-  lineMetrics:           number[];
+  lineLengths:           number[];
   totalWidth:            number;
 };
 type BoxId             = number;
@@ -104,8 +106,7 @@ class BoxNode {
   textMetrics: BoxTextMetrics = {
     size:                  [0, 0],
     lineBoundaries:        [],
-    wrappedLineBoundaries: [],
-    lineMetrics:           [],
+    lineLengths:           [],
     totalWidth:            0,
   };
   lastTextMetricsWrapWidth   = 0;
@@ -117,6 +118,7 @@ class BoxNode {
   viewOffset:    [number, number] = [0, 0];
   viewBounds:    [number, number] = [0, 0];
   maxFixedSize:  [number, number] = [0, 0];
+  minFixedSize:  [number, number] = [0, 0];
 
   layoutAxis: Axis = AxisX;
 
@@ -170,22 +172,39 @@ class BoxNode {
         let startX = Math.max(0, offsetX);
         let startY = Math.max(0, offsetY);
 
-        let offset = 0;
-        for (let idx = 0; idx < startY; idx += 1) {
-          offset += this.textMetrics.lineBoundaries[idx]! + 1;
+        if (hasFlag(this.flags, BoxFlags_TextAlignCenterX)) {
         }
 
+        if (hasFlag(this.flags, BoxFlags_TextAlignCenterY)) {
+        }
+
+        if (hasFlag(this.flags, BoxFlags_TextAlignEnd)) {
+        }
+
+        let offset = 0;
+        for (let idx = 0; idx < startY; idx += 1) {
+          offset += this.textMetrics.lineLengths[idx]! + 1;
+        }
+
+        // DebugLog(`${JSON.stringify(this.textMetrics)}`);
         for (let y = startY; y < this.textMetrics.lineBoundaries.length; y += 1) {
           const screenY = y + baseY - startY;
           if (screenY >= clipBottom) { break; }
 
-          const width = this.textMetrics.lineBoundaries[y]!;
-          for (let x = startX; x < width; x += 1) {
+          const width = this.textMetrics.lineLengths[y]!;
+          for (let x = startX; x < width;) {
             const screenX = x + baseX - startX;
             if (screenX >= clipRight) { break; }
 
+            const codePoint = text.codePointAt(offset + x)!;
+
             UiSetCell(screenX, screenY, text.codePointAt(offset + x)!,
                       this.cellFlags, this.background, this.foreground);
+            if (codePoint > 0xFFFF && (x + 1) < clipRight) {
+              x += 2;
+            } else {
+              x += 1;
+            }
           }
 
           offset += width + 1;
@@ -230,8 +249,8 @@ class BoxNode {
         switch (event.action) {
           default: {} break;
           case EventActionKind_ScrollUp:
-            case EventActionKind_ScrollDown: {
-            if (hasFlag(this.flags, BoxFlags_ScrollView) && (hasFlag(this.flags, BoxFlags_ScrollX) || hasFlag(this.flags, BoxFlags_ScrollY))) {
+          case EventActionKind_ScrollDown: {
+            if (hoveringClickable && hasFlag(this.flags, BoxFlags_ScrollView) && (hasFlag(this.flags, BoxFlags_ScrollX) || hasFlag(this.flags, BoxFlags_ScrollY))) {
               const direction = event.action === EventActionKind_ScrollUp ? -1 : 1;
               const axis      = (hasFlag(this.flags, BoxFlags_ScrollX) && ((event.mod & EventModFlag_Shift) !== 0)) ? 0 : 1;
 
@@ -320,11 +339,9 @@ function calcLayoutFixedSize(box: BoxNode, axis: Axis) {
       box.fixedSize[axis] = size.value;
     } break;
     case BoxSizeKind_TextContent: {
-      if (hasFlag(box!.flags, BoxFlags_DrawText) && box.rawText !== null) {
-        box.fixedSize[axis] = box.textMetrics!.size[axis]! + size.value;
-      }
+      box.fixedSize[axis] = box.textMetrics!.size[axis]! + size.value;
     } break;
-    default: break;
+    default: {} break;
   }
 
   for (const child of box.children) {
@@ -354,7 +371,7 @@ function calcLayoutPctSize(box: BoxNode, axis: Axis) {
 
     } break;
 
-    default: break;
+    default: {} break;
   }
 
   for (const child of box.children) {
@@ -408,15 +425,14 @@ function calcLayoutSizeClip(box: BoxNode, axis: Axis) {
     }
 
     const fix = totalSize - box.fixedSize[axis]!;
-    if (fix > 0) {
-      let error = 0;
+    if (fix > 0 && totalLimitedSize > 0) {
+      const fixPct = clamp(fix / totalLimitedSize, 0, 1);
+      let   error  = 0;
       for (const child of box.children) {
         if (hasFlag(child.flags, BoxFlags_FloatingX << axis)) { continue; }
-
         let childFix = child.fixedSize[axis]! * (1-child.preferedSize[axis]!.minKeepRatio);
         childFix     = Math.max(0, childFix);
 
-        const fixPct = clamp(fix / totalLimitedSize, 0, 1);
         const exact  = child.fixedSize[axis]! - childFix * fixPct;
 
         const fixedSize = Math.floor(exact + error);
@@ -428,8 +444,21 @@ function calcLayoutSizeClip(box: BoxNode, axis: Axis) {
 
   }
 
+  // if (hasFlag(box.flags, BoxFlags_AllowOverflowX << axis)) {
+  //   for (const child of box.children) {
+  //     if (child.preferedSize[axis]!.kind === BoxSizeKind_ParentPercent) {
+  //       child.fixedSize[axis] = box.fixedSize[axis]! * child.preferedSize[axis]!.value; 
+  //     }
+  //   }
+  // }
+
   for (const child of box.children) {
-    child.fixedSize[axis] = Math.min(child.fixedSize[axis]!, child.maxFixedSize[axis]!);;
+    if (hasFlag(box.flags, BoxFlags_AllowOverflowX << axis)) {
+      if (child.preferedSize[axis]!.kind === BoxSizeKind_ParentPercent) {
+        child.fixedSize[axis] = box.fixedSize[axis]! * child.preferedSize[axis]!.value; 
+      }
+    }
+    child.fixedSize[axis] = clamp(child.fixedSize[axis]!, child.minFixedSize[axis]!, child.maxFixedSize[axis]!);
   }
 
   for (const child of box.children) {
@@ -439,7 +468,7 @@ function calcLayoutSizeClip(box: BoxNode, axis: Axis) {
 
 function calcLayoutPosition(box: BoxNode, axis: Axis) {
   let bounds         = 0;
-  let layoutPosition = 0;
+  let layoutPosition = box.rect.min[axis]!;
   for (const child of box.children) {
     if (!hasFlag(child.flags, BoxFlags_FloatingX << axis)) {
       child.fixedPosition[axis] = layoutPosition;
@@ -451,8 +480,9 @@ function calcLayoutPosition(box: BoxNode, axis: Axis) {
       }
     }
 
-    child.rect.min[axis] = Math.floor(box.rect.min[axis]! + child.fixedPosition[axis]! - box.viewOffset[axis]!);
-    child.rect.max[axis] = Math.floor(child.rect.min[axis] + child.fixedSize[axis]!); 
+    child.fixedPosition[axis] = Math.floor(child.fixedPosition[axis]!);
+    child.rect.min[axis]      = Math.floor(child.fixedPosition[axis]! - box.viewOffset[axis]!);
+    child.rect.max[axis]      = Math.floor(child.rect.min[axis] + child.fixedSize[axis]!); 
   }
 
   box.viewBounds[axis] = Math.floor(bounds);
@@ -485,6 +515,10 @@ export {
   BoxFlags_Clickable,
   BoxFlags_ViewClamp,
   BoxFlags_TextWrap,
+  BoxFlags_TextAlignCenterX,
+  BoxFlags_TextAlignCenterY,
+  BoxFlags_TextAlignCenter,
+  BoxFlags_TextAlignEnd,
 
   sizeFitContent,
   sizeFixed,

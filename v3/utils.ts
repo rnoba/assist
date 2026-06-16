@@ -60,6 +60,7 @@ function measureText(text: string, maxWidth: number, wrap: boolean = true, resul
   result.size[0] = 0;
   result.size[1] = 0;
   result.lineBoundaries.length = 0;
+  result.lineLengths.length    = 0;
 
   const shouldWrap = wrap && maxWidth > 0 && Number.isFinite(maxWidth);
   let   totalWidth = 0;
@@ -90,6 +91,7 @@ function measureText(text: string, maxWidth: number, wrap: boolean = true, resul
     }
 
     result.lineBoundaries.push(width);
+    result.lineLengths.push(line.length);
 
     if (lineEnd === -1) { break; }
     idx = lineEnd + 1;
@@ -149,6 +151,34 @@ function splitText(text: string, width: number): string[] {
 
   return result;
 }
+
+function charWidth(codePoint: number): number {
+  if (codePoint < 0x1100)   { return 1; }
+  if (codePoint <= 0x115F)  { return 2; }  // Hangul Jamo
+  if (codePoint < 0x2E80)   { return 1; }
+  if (codePoint <= 0x303E)  { return 2; }  // CJK Radicals → Bopomofo
+  if (codePoint < 0x3041)   { return 1; }
+  if (codePoint <= 0x33BF)  { return 2; }  // Hiragana, Katakana, enclosed CJK
+  if (codePoint < 0x3400)   { return 1; }
+  if (codePoint <= 0x4DBF)  { return 2; }  // CJK Extension A
+  if (codePoint < 0x4E00)   { return 1; }
+  if (codePoint <= 0xA4CF)  { return 2; }  // CJK Unified Ideographs
+  if (codePoint < 0xAC00)   { return 1; }
+  if (codePoint <= 0xD7A3)  { return 2; }  // Hangul Syllables
+  if (codePoint < 0xF900)   { return 1; }
+  if (codePoint <= 0xFAFF)  { return 2; }  // CJK Compat Ideographs
+  if (codePoint < 0xFE10)   { return 1; }
+  if (codePoint <= 0xFE6F)  { return 2; }  // Vertical / Compat Forms
+  if (codePoint < 0xFF01)   { return 1; }
+  if (codePoint <= 0xFF60)  { return 2; }  // Fullwidth ASCII
+  if (codePoint < 0xFFE0)   { return 1; }
+  if (codePoint <= 0xFFE6)  { return 2; }  // Fullwidth signs
+  if (codePoint < 0x1F300)  { return 1; }
+  if (codePoint <= 0x1F9FF) { return 2; } // Emoji
+  if (codePoint < 0x20000)  { return 1; }
+  if (codePoint <= 0x3FFFD) { return 2; } // CJK Ext B+ and Tertiary Ideographic
+  return 1;
+}
 export {
   Range2xMake,
   Range2xIntersect,
@@ -165,6 +195,7 @@ export {
   measureText,
   splitText,
   hashText,
+  charWidth,
 }
 
 export type {

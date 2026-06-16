@@ -41,6 +41,18 @@ function kittyAction(evtType: number): number {
   return EventActionKind_Press;
 }
 
+function KeyEventToPrintableChar(event: Event) {
+  if (event.kind === EventKind_Key) {
+    if (event.code >= 32 && event.code <= 126)        { return event.name; }
+    if (event.code <= 159)                            { return null; } // DEL + C1 event.codeontrols
+    if (event.code >= 0xD800 && event.code <= 0xDFFF) { return null; } // surrogates
+    if (event.code > 0x10FFFF)                        { return null; } // out of range
+    return event.name; // é, ñ, 漢, emoji, ...
+  }
+
+  return null;
+}
+
 function kittyKeyName(code: number): string {
   if (code >= 97  && code <= 122) { return String.fromCharCode(code);      } // a–z
   if (code >= 65  && code <=  90) { return String.fromCharCode(code + 32); } // A–Z
@@ -339,7 +351,7 @@ function processChunk(chunk: string): string {
       action: EventActionKind_Press,
       mouseX: -1,
       mouseY: -1,
-      code
+      code,
     });
   }
 
@@ -383,7 +395,8 @@ export {
   EventModFlag_Ctrl,
   EventModFlag_Alt,
   InputInit,
-  InputPoll
+  InputPoll,
+  KeyEventToPrintableChar,
 };
 
 export type { Event }; 

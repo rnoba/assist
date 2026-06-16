@@ -1,4 +1,4 @@
-import { AxisX, getTime, hasFlag, hashText, measureText, waitTime } from "../utils";
+import { AxisX, charWidth, getTime, hasFlag, hashText, measureText, waitTime } from "../utils";
 import {
   colorFromKind,
   ColorKind_None,
@@ -243,8 +243,14 @@ function UiFlush() {
         }
       }
 
-      const cell = front[base]!;
-      if (isCursorHere) {
+      let cell = front[base]!;
+      if (false && isCursorHere) {
+        let col = x;
+        if (hasFlag(cell, CellFlags_WideTail)) {
+          cell = front[base-CELL_STRIDE]!;
+          col  = x - 1;
+        }
+
         const cursorBackground = ColorKind_Text;
         const cursorForeground = ColorKind_Primary;
 
@@ -254,7 +260,7 @@ function UiFlush() {
           lastFlags = 0;
         }
 
-        UiBufferWritePosition(x, y);
+        UiBufferWritePosition(col, y);
         UiBufferWriteColorBG(colorFromKind(cursorBackground));
         UiBufferWriteColorFG(colorFromKind(cursorForeground));
         UiBufferWriteCodepoint(cell & CellMask_Codepoint);
@@ -273,7 +279,6 @@ function UiFlush() {
       if (x !== lastCursorX || y !== lastCursorY) {
         UiBufferWritePosition(x, y);
       }
-
 
       let background = 0;
       if (hasFlag(cell, CellFlags_BackgroundSet)) {
@@ -356,8 +361,20 @@ function UiSetCell(x: number, y: number,
     color |= (foreground & 0xFFFF) << 16;
   }
 
-  front[base]   = cell;
-  front[base+1] = color;
+  if (charWidth(codepoint) === 2 && (x + 1) < width) {
+    cell |= CellFlags_Wide;
+    front[base]   = cell;
+    front[base+1] = color;
+
+    let tailFlags = CellFlags_WideTail;
+    if (colorValid(background)) { tailFlags |= CellFlags_BackgroundSet; }
+    if (colorValid(foreground)) { tailFlags |= CellFlags_ForegroundSet; }
+    front[base+CELL_STRIDE]   = tailFlags;
+    front[base+CELL_STRIDE+1] = color;
+  } else {
+    front[base]   = cell;
+    front[base+1] = color;
+  }
 }
 
 function UiClearScreen() {
@@ -451,6 +468,8 @@ function Box(hash: string, opts?: BoxOpts) {
 
   box!.maxFixedSize[0] = opts?.maxFixedWidth  ?? Number.MAX_SAFE_INTEGER;
   box!.maxFixedSize[1] = opts?.maxFixedHeight ?? Number.MAX_SAFE_INTEGER;
+  box!.minFixedSize[0] = opts?.minFixedWidth  ?? Number.MIN_SAFE_INTEGER;
+  box!.minFixedSize[1] = opts?.minFixedHeight ?? Number.MIN_SAFE_INTEGER;
 
   if (opts) {
     let textDirty = false; 
