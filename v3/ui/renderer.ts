@@ -2,6 +2,8 @@ import { AxisX, getTime, hasFlag, hashText, measureText, waitTime } from "../uti
 import {
   colorFromKind,
   ColorKind_None,
+  ColorKind_Primary,
+  ColorKind_Text,
   colorValid,
 
   type Color,
@@ -29,6 +31,7 @@ import {
 
   type Event,
 } from "./input";
+import { DebugLog } from "../debug";
 
 const ANSI = {
   clear:           () => "\x1b[2J\x1b[H",
@@ -224,15 +227,47 @@ function UiDeinit() {
   process.stdout.write(ANSI.clear());
 }
 
+
+let lastRenderedCursorX = 0;
+let lastRenderedCursorY = 0;
 function UiFlush() {
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const base = (width * y + x) * CELL_STRIDE;
+
+      const isCursorHere = (x === UiState.cursor.x && y === UiState.cursor.y);
       if (front[base] === back[base] && front[base+1] === back[base+1]) {
-        continue;
+        if (!isCursorHere &&
+            !(lastRenderedCursorX === x && lastRenderedCursorY === y)) {
+          continue;
+        }
       }
 
       const cell = front[base]!;
+      if (isCursorHere) {
+        const cursorBackground = ColorKind_Text;
+        const cursorForeground = ColorKind_Primary;
+
+        if (lastFlags !== 0) {
+          buffer[bufferPosition++]=0x1b; buffer[bufferPosition++]=0x5b; // ESC [
+          buffer[bufferPosition++]=0x30; buffer[bufferPosition++]=0x6d; // 0m
+          lastFlags = 0;
+        }
+
+        UiBufferWritePosition(x, y);
+        UiBufferWriteColorBG(colorFromKind(cursorBackground));
+        UiBufferWriteColorFG(colorFromKind(cursorForeground));
+        UiBufferWriteCodepoint(cell & CellMask_Codepoint);
+
+        lastBackground = cursorBackground;
+        lastForeground = cursorForeground;
+
+        if (hasFlag(cell, CellFlags_Wide)) { lastCursorX = x + 2; }
+        else                               { lastCursorX = x + 1; }
+        lastCursorY = y;
+        continue;
+      }
+
       if (hasFlag(cell, CellFlags_WideTail)) { continue; }
 
       if (x !== lastCursorX || y !== lastCursorY) {
@@ -248,7 +283,6 @@ function UiFlush() {
       if (hasFlag(cell, CellFlags_ForegroundSet)) {
         foreground = (front[base+1]! >>> 16) & 0xFFFF;
       }
-
       const attrs = cell & CellMask_Attrs;
       if ((lastFlags & ~attrs) !== 0) {
         buffer[bufferPosition++]=0x1b; buffer[bufferPosition++]=0x5b; // ESC [
@@ -296,6 +330,9 @@ function UiFlush() {
 
   UiBufferFlush();
 
+  lastRenderedCursorX = UiState.cursor.x;
+  lastRenderedCursorY = UiState.cursor.y;
+
   const tmp = back;
   back  = front;
   front = tmp
@@ -332,12 +369,12 @@ function UiClearScreen() {
 }
 
 function UiRender(box: BoxNode) {
-  if (UiState.BOX_CACHE.has(box.id) || box === UiState.root) {
+  if (box.id !== BoxIdNone && UiState.BOX_CACHE.has(box.id)) {
     box.render();
+  }
 
-    for (const node of box.children) {
-      UiRender(node);
-    }
+  for (const node of box.children) {
+    UiRender(node);
   }
 }
 

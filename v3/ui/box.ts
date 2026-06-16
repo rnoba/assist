@@ -136,7 +136,6 @@ class BoxNode {
     // TODO(rnoba): better text rendering/caching
     // TODO(rnoba): text alignment 
     if (this.id !== BoxIdNone) {
-
       let rect: Range2x = this.rect;
 
       for (let parent = this.parent; parent !== null; parent = parent.parent) {
@@ -163,10 +162,10 @@ class BoxNode {
         let text = this.rawText;
         if (hasFlag(this.flags, BoxFlags_TextWrap)) { text = this.wrappedText!; }
 
-        const offsetX    = this.fixedPosition[0]-this.rect.min[0]; 
-        const offsetY    = this.fixedPosition[1]-this.rect.min[1]; 
-        const clipRight  = this.parent?.rect.max[0] ?? rect.max[0];
-        const clipBottom = this.parent?.rect.max[1] ?? rect.max[1];
+        const offsetX    = this.fixedPosition[0]-this.rect.min[0];
+        const offsetY    = this.fixedPosition[1]-this.rect.min[1];
+        const clipRight  = rect.max[0];
+        const clipBottom = rect.max[1];
 
         let startX = Math.max(0, offsetX);
         let startY = Math.max(0, offsetY);
@@ -177,12 +176,12 @@ class BoxNode {
         }
 
         for (let y = startY; y < this.textMetrics.lineBoundaries.length; y += 1) {
-          const screenY = y + baseY - offsetY;
+          const screenY = y + baseY - startY;
           if (screenY >= clipBottom) { break; }
 
           const width = this.textMetrics.lineBoundaries[y]!;
           for (let x = startX; x < width; x += 1) {
-            const screenX = x + baseX - offsetX;
+            const screenX = x + baseX - startX;
             if (screenX >= clipRight) { break; }
 
             UiSetCell(screenX, screenY, text.codePointAt(offset + x)!,
@@ -324,47 +323,6 @@ function calcLayoutFixedSize(box: BoxNode, axis: Axis) {
       if (hasFlag(box!.flags, BoxFlags_DrawText) && box.rawText !== null) {
         box.fixedSize[axis] = box.textMetrics!.size[axis]! + size.value;
       }
-      // switch (axis) {
-        // default: {} break;
-        // case AxisX: {
-        //
-        //   if (!hasFlag(box.flags, BoxFlags_TextWrap)) {
-        //     let maxWidth = 0;
-        //     const split  = box.rawText.split("\n");
-        //     for (let idx = 0; idx < split.length; idx += 1) {
-        //       if (split[idx]!.length > maxWidth) { maxWidth = split[idx]!.length; }
-        //     }
-        //
-        //     box.fixedSize[AxisX] = maxWidth + size.value;
-        //   }
-        //
-        // } break;
-        // case AxisY: {
-        //   let height = 0;
-        //   if (hasFlag(box.flags, BoxFlags_TextWrap)) {
-        //     const width = box.fixedSize[AxisX];
-        //     if (box.wrappedWidth !== width || box.textDirty) {
-        //       box.buffer       = splitText(box.rawText, width);
-        //       box.wrappedWidth = width;
-        //       box.textDirty    = false;
-        //     }
-        //
-        //     height = box.buffer.length;
-        //   } else {
-        //     let lines = 1;
-        //
-        //     for (let idx = 0; idx < box.rawText.length; idx += 1) {
-        //       if (box.rawText.charCodeAt(idx) === 0x0a) {
-        //         lines += 1;
-        //       }
-        //
-        //     }
-        //     height = lines;
-        //   }
-        //
-        //   box.fixedSize[AxisY] = height + size.value;
-        // } break;
-      // }
     } break;
     default: break;
   }

@@ -205,8 +205,8 @@ function processChunk(chunk: string): string {
               name,
               mod,
               action,
-              mouseX: cx,
-              mouseY: cy,
+              mouseX: cx-1,
+              mouseY: cy-1,
               code: 0
             });
           }

@@ -96,12 +96,12 @@ function measureText(text: string, maxWidth: number, wrap: boolean = true, resul
   }
 
   if (result.lineBoundaries.length !== result.size[1]) {
+    DebugLog(JSON.stringify(result));
+    DebugLog(String(maxWidth));
     throw new Error("measureText");
   }
 
   result.totalWidth = totalWidth;
-  // DebugLog(JSON.stringify(result));
-  // DebugLog(String(maxWidth));
 
   return result;
 }
